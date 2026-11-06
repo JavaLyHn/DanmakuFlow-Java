@@ -66,11 +66,22 @@ class GatewayServiceTest {
         eventually(() -> a.code == 1011 && b.code == 1011);
     }
     @Test void statsCountConnectionsSkipOverlapAndRecoverAfterFailure() throws Exception {
+        // This test drives ticks explicitly; keep the periodic timer from adding unrelated refreshes.
+        var tickerField = GatewayService.class.getDeclaredField("ticker");
+        tickerField.setAccessible(true);
+        ((ScheduledFuture<?>) tickerField.get(gateway)).cancel(false);
+        var queuedField = GatewayService.class.getDeclaredField("tickQueued");
+        queuedField.setAccessible(true);
+        var tickQueued = (java.util.concurrent.atomic.AtomicBoolean) queuedField.get(gateway);
         var a = join("r"); var b = join("r"); stats.gate = new CompletableFuture<>();
-        gateway.tick(); eventually(() -> stats.counts.size() == 1); gateway.tick();
+        gateway.tick(); eventually(() -> stats.counts.size() == 1 && !tickQueued.get());
+        gateway.tick(); eventually(() -> !tickQueued.get());
         assertEquals(List.of(2), stats.counts); gateway.leave(b);
         stats.gate.completeExceptionally(new RuntimeException()); eventually(() -> gateway.failures() == 1);
-        stats.gate = CompletableFuture.completedFuture(new RoomStats(1, 4)); gateway.tick();
+        stats.gate = new CompletableFuture<>();
+        gateway.tick();
+        eventually(() -> stats.counts.size() == 2 && !tickQueued.get());
+        stats.gate.complete(new RoomStats(1, 4));
         eventually(() -> a.frames.size() == 1); assertTrue(b.frames.isEmpty());
         assertEquals(List.of(2, 1), stats.counts); assertTrue(bus.published.isEmpty());
         assertEquals(Duration.ofSeconds(7), stats.ttl);
