@@ -1,6 +1,8 @@
-# DanmakuFlow
+# DanmakuFlow-Java
 
-从 [charlesAcmen/live-stream-danmaku](https://github.com/charlesAcmen/live-stream-danmaku) 逐步迁移的 Java 直播弹幕后端。目标是兼容原有 WebSocket 协议，保留 Redis 跨节点广播、房间统计、Kafka 异步持久化能力，并修复明显的数据可靠性问题。
+Java 直播弹幕后端，支持 WebSocket 协议、Redis 跨节点广播、房间统计和 Kafka → MySQL 异步持久化。
+
+**维护状态：暂停。**自 2026-11-06 起，以 [DanmakuFlow](https://github.com/JavaLyHn/DanmakuFlow) 的 Go 版本为开发主线。当前 Java 源码和提交历史保留，只有收到明确的同步指令后才继续 Java 开发或同步选定改动。
 
 支持房间内弹幕、点赞、在线连接数统计和跨网关广播，以及独立的批量持久化进程。这里不包含视频推流、前端播放器或账号认证；`uid` 是客户端提供的开发协议身份，不能视为已认证用户。
 
@@ -57,6 +59,5 @@ mvn -B -T1 package
 - [进展记录与已暂停的 Go 基线](docs/migration/PROGRESS.md)
 - [已执行与待完成的验证](docs/migration/VALIDATION.md)
 - [后续性能对比与 JMeter 计划（未执行）](docs/migration/PERFORMANCE.md)
-- [上游版本与出处](legacy/UPSTREAM.md)
 
-Java 新实现采用本仓库 MIT 许可。原项目代码保留原作者的 MIT 许可及出处。
+Java 实现的许可见 [LICENSE](LICENSE)，随附 Go 参考代码的许可见 [legacy/go/LICENSE](legacy/go/LICENSE)。
