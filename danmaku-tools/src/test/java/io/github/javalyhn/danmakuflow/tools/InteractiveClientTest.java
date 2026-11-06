@@ -200,6 +200,43 @@ class InteractiveClientTest {
         }
     }
 
+    @Test void serverErrorClosesFailWithoutPrintingUntrustedReasons() {
+        for (int code : List.of(1008, 1011, 1013)) {
+            var bytes = new ByteArrayOutputStream();
+            var session = new ClientSession(System.out, new PrintStream(bytes), Duration.ofMillis(20));
+            var socket = new FakeSocket();
+            session.onOpen(socket);
+            session.onClose(socket, code, "secret\nforged diagnostic");
+            assertEquals(1, session.finished().join(), "close code " + code);
+            String diagnostic = bytes.toString(StandardCharsets.UTF_8);
+            assertTrue(diagnostic.contains(Integer.toString(code)));
+            assertFalse(diagnostic.contains("secret"));
+            assertFalse(diagnostic.contains("forged"));
+        }
+    }
+
+    @Test void normalClosesAndCompletedLocalShutdownStaySuccessful() {
+        for (int code : List.of(1000, 1001)) {
+            var bytes = new ByteArrayOutputStream();
+            var session = new ClientSession(System.out, new PrintStream(bytes), Duration.ofMillis(20));
+            var socket = new FakeSocket();
+            session.onOpen(socket);
+            session.onClose(socket, code, "secret");
+            assertEquals(0, session.finished().join());
+            assertEquals("", bytes.toString(StandardCharsets.UTF_8));
+        }
+        for (boolean quit : List.of(true, false)) {
+            var bytes = new ByteArrayOutputStream();
+            var session = new ClientSession(System.out, new PrintStream(bytes), Duration.ofMillis(20));
+            var socket = new FakeSocket();
+            session.onOpen(socket);
+            if (quit) session.sendLine("/quit"); else session.stop();
+            session.onClose(socket, 1011, "secret");
+            assertEquals(0, session.finished().join());
+            assertEquals("", bytes.toString(StandardCharsets.UTF_8));
+        }
+    }
+
     static class FakeSocket implements WebSocket {
         final List<String> sent = new ArrayList<>();
         CompletableFuture<WebSocket> write = CompletableFuture.completedFuture(this);

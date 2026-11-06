@@ -47,7 +47,13 @@ final class ClientSession implements WebSocket.Listener {
     }
 
     @Override public synchronized CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-        finished.complete(0);
+        if (!finished.isDone()) {
+            if (statusCode == WebSocket.NORMAL_CLOSURE || statusCode == 1001) finished.complete(0);
+            else {
+                errors.println("WebSocket closed with status " + statusCode);
+                finished.complete(1);
+            }
+        }
         return CompletableFuture.completedFuture(null);
     }
 
