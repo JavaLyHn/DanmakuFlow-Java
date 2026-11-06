@@ -199,6 +199,75 @@ class NettyGatewayTransportTest {
         }
         assertTrue(listeners.isEmpty());
     }
+    @Test void automaticPongsCannotExceedFrameBudget() throws Exception { assertPongBudget(2, 100); }
+    @Test void automaticPongsCannotExceedByteBudget() throws Exception { assertPongBudget(10, 5); }
+
+    private void assertPongBudget(int maxFrames, long maxBytes) throws Exception {
+        var codec = new ProtocolCodec();
+        var service = new GatewayService(e -> CompletableFuture.completedFuture(null),
+            new GatewayServiceTest.Bus(), new GatewayServiceTest.Stats(), codec,
+            Clock.systemUTC(), UUID::randomUUID, new GatewayService.Limits(5, 10, 10));
+        var server = new NettyGatewayServer(service, codec,
+            new NettyGatewayServer.Settings("127.0.0.1", 0, 5, maxFrames, maxBytes));
+        var channel = new EmbeddedChannel();
+        server.configurePipeline(channel.pipeline());
+        var held = new HeldFrames();
+        var incoming = new ArrayList<io.netty.buffer.ByteBuf>();
+        var decodedPayloads = new ArrayList<io.netty.buffer.ByteBuf>();
+        try {
+            String request = "GET /ws?uid=1&room=r HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+            channel.writeInbound(io.netty.buffer.Unpooled.copiedBuffer(request, java.nio.charset.StandardCharsets.US_ASCII));
+            Object response;
+            while ((response = channel.readOutbound()) != null) ReferenceCountUtil.release(response);
+            assertTrue(channel.isActive());
+            channel.pipeline().addAfter(channel.pipeline().context(HandshakeValidator.class).name(), "heldWrites", held);
+            channel.pipeline().addBefore(channel.pipeline().context(WebSocketServerProtocolHandler.class).name(), "observePings",
+                new ChannelInboundHandlerAdapter() {
+                    @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
+                        if (message instanceof PingWebSocketFrame ping) decodedPayloads.add(ping.content());
+                        ctx.fireChannelRead(message);
+                    }
+                });
+            for (int i = 0; i < 3; i++) {
+                var ping = io.netty.buffer.Unpooled.buffer().writeByte(0x89).writeByte(0x82).writeInt(0).writeShort(7);
+                incoming.add(ping);
+                channel.writeInbound(ping);
+            }
+            assertFalse(channel.isActive(), "Ping overflow must close without waiting for a reader");
+            assertEquals(2, held.totalFrames);
+            assertEquals(4, held.totalBytes);
+            assertTrue(held.frames.isEmpty());
+            assertTrue(held.seen.stream().allMatch(f -> f.refCnt() == 0));
+            assertTrue(incoming.stream().allMatch(b -> b.refCnt() == 0));
+            assertEquals(3, decodedPayloads.size());
+            assertTrue(decodedPayloads.stream().allMatch(b -> b.refCnt() == 0), "Including the rejected Pong payload");
+        } finally {
+            channel.finishAndReleaseAll();
+            held.release();
+            service.closeAsync().toCompletableFuture().get(4, TimeUnit.SECONDS);
+        }
+    }
+
+    static final class HeldFrames extends ChannelOutboundHandlerAdapter {
+        final List<WebSocketFrame> frames = new ArrayList<>();
+        final List<WebSocketFrame> seen = new ArrayList<>();
+        final List<ChannelPromise> promises = new ArrayList<>();
+        int totalFrames, totalBytes;
+        @Override public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+            var frame = (WebSocketFrame) message;
+            frames.add(frame); seen.add(frame); promises.add(promise);
+            totalFrames++; totalBytes += frame.content().readableBytes();
+        }
+        @Override public void close(ChannelHandlerContext ctx, ChannelPromise promise) {
+            release(); ctx.close(promise);
+        }
+        void release() {
+            frames.forEach(ReferenceCountUtil::release); frames.clear();
+            var pending = new ArrayList<>(promises); promises.clear();
+            pending.forEach(p -> p.tryFailure(new java.nio.channels.ClosedChannelException()));
+        }
+    }
+
     static WebSocket connect(HttpClient http, InetSocketAddress address, String room, Listener listener) throws Exception {
         return http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(2)).buildAsync(URI.create("ws://127.0.0.1:" + address.getPort() + "/ws?uid=18446744073709551615&room=" + room), listener).get(2, TimeUnit.SECONDS);
     }

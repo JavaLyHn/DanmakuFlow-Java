@@ -47,10 +47,7 @@ public final class NettyGatewayServer implements AutoCloseable {
                         int count = accepted.incrementAndGet();
                         channel.closeFuture().addListener(f -> { children.remove(channel); accepted.decrementAndGet(); });
                         if (count > settings.maxConnections()) { channel.close(); return; }
-                        channel.pipeline().addLast(new HttpServerCodec(), new HttpObjectAggregator(8192),
-                            new HandshakeValidator(), new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
-                                .websocketPath("/ws").checkStartsWith(true).maxFramePayloadLength(8192).handshakeTimeoutMillis(5000).build()),
-                            new HandshakeDeadline(), new WebSocketFrameAggregator(8192), new GatewayFrameHandler(service, codec, settings));
+                        configurePipeline(channel.pipeline());
                     }
                 }).bind(settings.host(), settings.port());
             listener = bind.channel();
@@ -58,6 +55,13 @@ public final class NettyGatewayServer implements AutoCloseable {
             if (!bind.isSuccess()) throw new IllegalStateException("Gateway bind failed", bind.cause());
             return (InetSocketAddress) listener.localAddress();
         } catch (RuntimeException | InterruptedException failure) { close(); throw failure; }
+    }
+    void configurePipeline(ChannelPipeline pipeline) {
+        pipeline.addLast(new HttpServerCodec(), new HttpObjectAggregator(8192),
+            new HandshakeValidator(), new OutboundFrameBudget(settings.maxPendingFrames(), settings.maxPendingBytes()),
+            new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
+                .websocketPath("/ws").checkStartsWith(true).maxFramePayloadLength(8192).handshakeTimeoutMillis(5000).build()),
+            new HandshakeDeadline(), new WebSocketFrameAggregator(8192), new GatewayFrameHandler(service, codec, settings));
     }
     public int activeConnections() { return accepted.get(); }
     @Override public synchronized void close() {
